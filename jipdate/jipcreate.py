@@ -79,37 +79,11 @@ def email_to_name(email):
 ################################################################################
 def get_parser():
     """ Takes care of script argument parsing. """
-    parser = ArgumentParser(description='Script used to update comments in Jira')
-
-    parser.add_argument('-e', required=False, action="store_true", \
-            default=False, \
-            help='Only include epics (no initiatives or stories). Used in combination \
-            with "-q"')
+    parser = ArgumentParser(description='Script used to create tickets in Jira')
 
     parser.add_argument('-f', '--file', required=False, action="store", \
             default=None, \
-            help='Load status update from FILE.  NOTE: -q will overwrite the \
-            content of FILE')
-
-    parser.add_argument('-l', required=False, action="store_true", \
-            default=False, \
-            help='Get the last comment from Jira')
-
-    parser.add_argument('-p', required=False, action="store_true", \
-            default=False, \
-            help='Print Jira query result to stdout (no editor or jira updates)')
-
-    parser.add_argument('-q', required=False, action="store_true", \
-            default=False, \
-            help='Query Jira for issue(s) assigned to you')
-
-    parser.add_argument('-s', required=False, action="store_true", \
-            default=False, \
-            help='Be silent, only show jira updates and not entire status file')
-
-    parser.add_argument('-t', required=False, action="store_true", \
-            default=False, \
-            help='Use the test server')
+            help='Create issue from FILE.')
 
     parser.add_argument('-u', '--user', required=False, action="store", \
             default=None, \
@@ -119,15 +93,6 @@ def get_parser():
     parser.add_argument('-v', required=False, action="store_true", \
             default=False, \
             help='Output some verbose debugging info')
-
-    parser.add_argument('-x', required=False, action="store_true", \
-            default=False, \
-            help='EXCLUDE stories and sub-tasks from gathered Jira issues. Used in combination \
-            with "-q"')
-
-    parser.add_argument('--all', required=False, action="store_true", \
-            default=False, \
-            help='Load all Jira issues, not just the once marked in progress.')
 
     parser.add_argument('--dry-run', required=False, action="store_true", \
             default=False, \
@@ -255,6 +220,18 @@ def should_update():
         else:
             print("Incorrect input: %s" % answer)
 
+def parse_issue_file(new_issue_file):
+    """ Reads new issue file and parse it into a python object
+    """
+
+    if not os.path.isfile(new_issue_file):
+        sys.exit(-1)
+
+    log.debug("Using issue file: %s" % new_issue_file)
+    with open(new_issue_file, 'r') as yml:
+        yml_issues = yaml.load(yml, Loader=yaml.FullLoader)
+
+    return yml_issues
 
 def parse_status_file(jira, filename, issues):
     """
@@ -263,21 +240,50 @@ def parse_status_file(jira, filename, issues):
     standalone [ISSUE] tag. It will also remove all comments prefixed with '#'.
     """
     # Regexp to match Jira issue on a single line, i.e:
-    # [SWG-28]
-    # [LITE-32]
+    # [Story]
+    # [Epic]
     # ...
-    regex = r"^\[([A-Z]+-[0-9]+).*\]\n$"
-
-    # Regexp to match a tag that indicates we should stop processing, ex:
-    # [STOP]
-    # [JIPDATE-STOP]
-    # [OTHER]
-    # ...
-    regex_stop = r"^\[.*\]\n$"
+    regex = r'^\[Issue]\n$'
 
     # Regexp to mach a tag that indicates to stop processing completely:
     # [FIN]
-    regex_fin = r"^\[FIN\]\n$"
+    regex_fin = r'^\[FIN\]\n$'
+
+    # Regexp to match for which project to use. This will remove Project: from the
+    # match.
+    regex_issue_type = r'(?:^Issue type:) *(.+)\n$'
+
+    # Regexp to match for which summary to use. This will be used as epic name as well in case of epic. This woill remove Project: from the#
+    # match:
+    regex_summary = r'(?:^Summary:) *(.+)\n$'
+
+    # Regexp to match for which project to use. This woill remove Project: from the#
+    # match:
+    regex_description = r'(?:^Description:) *(.+)\n$'
+
+    # Regexp to match for which project to use. This woill remove Project: from the#
+    # match:
+    regex_project = r'(?:^Project:) *(.+)\n$'
+
+    # Regexp to match for which project to use. This woill remove Project: from the#
+    # match:
+    regex_components = r'(?:^Components:) *(.+)\n$'
+
+    # Regexp to match for which project to use. This woill remove Project: from the#
+    # match:
+    regex_assignee = r'(?:^Assignee:) *(.+)\n$'
+
+    # Regexp to match for which project to use. This woill remove Project: from the#
+    # match:
+    regex_epic_link = r'(?:^Epic link:) *(.+)\n$'
+
+    # Regexp to match for which project to use. This woill remove Project: from the#
+    # match:
+    regex_sprint = r'(?:^Sprint:) *(.+)\n$'
+
+    # Regexp to match for which project to use. This woill remove Project: from the#
+    # match:
+    regex_original_estimate = r'(?:^Original estimate:) *(.+)\n$'
 
     # Regexp to match for a status update, this will remove 'Status' from the
     # match:
@@ -286,27 +292,19 @@ def parse_status_file(jira, filename, issues):
     # Contains the status text, it could be a file or a status email
     status = ""
 
-    # List of resolutions (when doing a transition to Resolved). Query once globally.
-    resolution_map = dict([(t.name.title(), t.id) for t in jira.resolutions()])
-
     with open(filename) as f:
         status = f.readlines()
 
     myissue = "";
-    mycomment = "";
 
     # build list of {issue,comment} tuples found in status
     issue_comments = []
     for line in status:
         # New issue?
-        match = re.search(regex, line)
-
-        # Evaluate and save the transition regex for later. We have to do this
-        # here, since we cannot assign and save the variable in the if
-        # construction as you can do in C for example.
-        transition = re.search(regex_status, line)
+        match = re.match(regex, line)
 
         if match:
+
             myissue = match.group(1)
             validissue = True
 
@@ -501,44 +499,71 @@ def main():
     # accessible everywhere after this call.
     cfg.initiate_config()
 
-    if not cfg.args.file and not cfg.args.q:
-        log.error("No file provided and not in query mode\n")
+    if not cfg.args.file:
+        log.error("No file provided\n")
         parser.print_help()
         sys.exit(os.EX_USAGE)
 
-    jira, username = jiralogin.get_jira_instance(cfg.args.t)
+    jira, username = jiralogin.get_jira_instance(False)
 
-    if cfg.args.x or cfg.args.e:
-        if not cfg.args.q:
-            log.error("Arguments '-x' and '-e' can only be used together with '-q'")
-            sys.exit(os.EX_USAGE)
-
-    if cfg.args.p and not cfg.args.q:
-        log.error("Arguments '-p' can only be used together with '-q'")
-        sys.exit(os.EX_USAGE)
-
-    if cfg.args.q:
-        (filename, issues) = get_jira_issues(jira, username)
-
-        if cfg.args.p:
-            print_status_file(filename)
-            sys.exit(os.EX_OK)
-    elif cfg.args.file is not None:
+    if cfg.args.file is not None:
         filename = cfg.args.file
+        issues = parse_issue_file(filename)
+        print(issues)
+        for issue in issues:
+            # We should only find one project and one issue type otherwise something is wrong
+            issue_meta_data = jira.createmeta(projectKeys=issue['Project'], issuetypeNames=issue['IssueType'], expand='projects.issuetypes.fields')
+            issue_fields_dict = {}
+            try:
+                issue_fields_dict = issue_meta_data['projects'][0]['issuetypes'][0]['fields']
+            except IndexError:
+                print('Could not get meta data from Jira for project \"' + issue['Project'] + '\" and issue type \"' + issue['IssueType'] + '\"')
+
+            if issue_fields_dict:
+                fields = {
+                    'project': {'key': issue['Project']},
+                    'summary': issue['Summary'],
+                    'description': issue['Description'],
+                    'issuetype': {'name': issue['IssueType']},
+                    'timetracking': {'originalEstimate': issue['OriginalEstimate']}
+                }
+
+                if 'AssigneeEmail' in issue.keys():
+                    assignee = jira.search_assignable_users_for_issues(query=issue['AssigneeEmail'], project=issue['Project'])
+                    # We assume that the first entry in the returned user array is the one we want
+                    if len(assignee) > 0:
+                        fields['assignee'] = {'id': assignee[0].accountId}
+
+                if 'EpicLink' in issue.keys():
+                    fields['customfield_10014'] = issue['EpicLink']
+
+                if 'Component' in issue.keys():
+                    components = jira.project_components(issue['Project'])
+                    for c in components:
+                        if c.name == issue['Component']:
+                            fields['components'] = [{'id': str(c.id)}]
+
+                sprint_found = True  # Only indicate sprint not found in case a sprint has been specified.
+                if 'Sprint' in issue.keys():
+                    sprint_found = False
+                    boards_in_project = jira.boards(projectKeyOrID=issue['Project'])
+                    for board in boards_in_project:
+                        sprints_in_board = jira.sprints(board_id=board.id)
+                        for sprint in sprints_in_board:
+                            if sprint.name == issue['Sprint']:
+                                fields['customfield_10020'] = sprint.id
+                                print('Found '+ sprint.name + ' ' + str(sprint.id))
+                                sprint_found = True
+
+                if sprint_found:
+                    print(fields)
+                    new_issue = jira.create_issue(fields=fields)
+                    print(new_issue)
+                else:
+                    print('Sprint \"' + issue['Sprint'] + '\" not found in project ' + issue['Project'])
     else:
         log.error("Trying to run script with unsupported configuration. Try using --help.")
         sys.exit(os.EX_USAGE)
-
-    if get_editor():
-        open_editor(filename)
-
-    try:
-        issues
-    # issues is not defined, we haven't made any query yet.
-    except NameError:
-        parse_status_file(jira, filename, None)
-    else:
-        parse_status_file(jira, filename, issues)
 
 if __name__ == "__main__":
     main()
